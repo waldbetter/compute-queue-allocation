@@ -1,0 +1,12 @@
+# 后端 Python 依赖（与 backend/requirements.txt 同步）
+# 安装：python -m venv .venv && .venv\Scripts\pip install -r requirements.txt
+# 前端依赖见 frontend/package.json（npm install）
+fastapi[standard]>=0.115,<0.116
+uvicorn[standard]>=0.32,<0.33
+sqlalchemy[asyncio]>=2.0,<2.1
+aiomysql>=0.2,<0.3
+pydantic-settings>=2.5,<3.0
+pytest>=8.0,<9.0
+pytest-asyncio>=0.24,<1.0
+httpx>=0.27,<0.28
+python-dotenv>=1.0,<2.0
