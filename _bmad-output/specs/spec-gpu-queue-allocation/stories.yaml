@@ -1,0 +1,237 @@
+# BMAD stories.yaml — GPU Queue Allocation MVP
+# Generated: 2026-10-26
+# Updated: 2026-10-29（新增 3-9 多卡同型号分配）
+# Total: 25 stories across 5 epics
+
+# ===== Epic 1: 脚手架 =====
+- id: "1-1"
+  title: 后端项目初始化与数据库连接
+  description: >-
+    Python 3.11 + FastAPI + SQLAlchemy async + aiomysql；pydantic-settings 配置；
+    MySQL DDL 创建全部 4 张表；日志框架初始化；基础 pytest 配置。
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    测试用 SQLite async 模式替代 MySQL（alembic 仍对 MySQL 生成 DDL）；
+    使用 `uvicorn[standard]` 作为 ASGI server。
+
+- id: "1-2"
+  title: ORM 模型与 Repository 接口
+  description: >-
+    按 database-schema.md 实现四个 SQLAlchemy ORM 模型；
+    domain 层定义抽象接口，infrastructure 层提供 MySQL 实现。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "1-3"
+  title: FastAPI 入口与 Lifespan
+  description: >-
+    async lifespan：startup 时 init DB pool + spawn dispatcher Task + init ProcessManager；
+    shutdown 时 await dispatcher.cancel() + 释放 DB pool。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "1-4"
+  title: 全局异常处理与 CORS
+  description: >-
+    AppError 基类 + http_status 属性；FastAPI @app.exception_handler(AppError)；
+    CORS 允许 localhost:5173；未知异常记 ERROR 日志返回 500。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "1-5"
+  title: 前端 Vue 项目初始化
+  description: >-
+    Vue 3 + Vite + Pinia + Vue Router + Element Plus；
+    路由 /login /tasks /gpus /tasks/submit；axios 实例 + ws client 骨架。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "1-6"
+  title: AGENTS.md 与 README
+  description: >-
+    项目根目录 AGENTS.md 含 AI agent 指引；docs/README.md 快速启动。
+  spec_checkpoint: false
+  done_checkpoint: true
+
+# ===== Epic 2: 用户与 GPU =====
+- id: "2-1"
+  title: 用户创建与当前用户识别
+  description: >-
+    POST /users 创建测试用户；GET /users/me 返回当前用户；
+    MVP session cookie 简化标识，跳过密码。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "2-2"
+  title: 权限中间件
+  description: >-
+    FastAPI Depends 区分 member / admin；admin 路由非 admin 403。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "2-3"
+  title: GPU 登记与 CRUD
+  description: >-
+    POST/GET/PATCH /gpus；name UNIQUE；admin 才能写；默认 IDLE。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "2-4"
+  title: GPU 状态转换校验
+  description: >-
+    RUNNING GPU 禁止标记 MAINTENANCE/FAULTY；后端显式校验。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "2-5"
+  title: GPU 管理面板 Vue 页面
+  description: >-
+    Element Plus 表格 + status Tag + admin 操作按钮。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "2-6"
+  title: 测试数据初始化脚本
+  description: >-
+    seed.py：1 admin + 2 member + 3 GPU (2×3090, 1×A100)。
+  spec_checkpoint: false
+  done_checkpoint: true
+
+# ===== Epic 3: 排队与分配（核心） =====
+- id: "3-1"
+  title: 任务提交 API 与校验
+  description: >-
+    POST /tasks；gpu_count==1 校验；QUEUED 状态；queue_position 即时计算。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "3-2"
+  title: 任务列表与详情
+  description: >-
+    GET /tasks（当前用户）/tasks/admin（全部）；GET /tasks/{id} 含 queue_position。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "3-3"
+  title: FCFS 调度器 asyncio Task
+  description: >-
+    dispatcher.py run_dispatcher()；完整 AD-1 事务 SQL（FOR UPDATE 必须执行）；
+    主循环 ≤ 500ms；subprocess 启动。
+  spec_checkpoint: true
+  done_checkpoint: false
+  invoke_dev_with: >-
+    这是整个 MVP 的心脏。先写单元测试（pytest-asyncio）再实现；
+    FOR UPDATE + 事务逻辑必须单独提取成 try_allocate_gpu() 方法方便 mock 测试；
+    失败时 Log 1205 Lock wait timeout 并返回 409。
+
+- id: "3-4"
+  title: 并发分配安全单元测试
+  description: >-
+    真实 MySQL（Testcontainers）；1 张 IDLE GPU + N=50/100 并发；验证仅 1 条 ALLOCATE 日志。
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    使用 Testcontainers Python 启动一次性 MySQL；必须验证事务回滚完整性。
+
+- id: "3-5"
+  title: subprocess 执行与监控
+  description: >-
+    ProcessManager：asyncio.create_subprocess_exec；
+    CUDA_VISIBLE_DEVICES 注入；日志写 logs/{task_id}.log；exit code 处理。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "3-6"
+  title: 任务取消与终止
+  description: >-
+    POST /tasks/{id}/cancel（owner，QUEUED/PENDING）；
+    POST /tasks/{id}/terminate（admin，任意状态）；SIGTERM / Windows taskkill。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "3-7"
+  title: 任务提交 Vue 页面
+  description: >-
+    /tasks/submit Element Plus 表单；提交后跳转列表。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "3-8"
+  title: 任务列表 Vue 页面 + WebSocket
+  description: >-
+    /tasks 表格 + WS 实时更新；依赖 Epic 4 的 WS 基础设施。
+  spec_checkpoint: false
+  done_checkpoint: true
+
+- id: "3-9"
+  title: 多卡同型号分配（Post-MVP 增强）
+  description: >-
+    gpu_count 放开为 1-N（上限 64）。调度器按任务型号偏好（未填则以最早空闲卡
+    型号为基准）一次性 SELECT ... FOR UPDATE 锁 N 张同型号 IDLE 卡；凑不齐则
+    队首阻塞保持排队（保 FCFS 语义，不做跨型号混搭）。CUDA_VISIBLE_DEVICES
+    注入逗号串（如 "1,2"）；GPU.current_task_id 多行指向同一任务，完成/终止/
+    启动失败均按 current_task_id 批量释放。
+  spec_checkpoint: true
+  done_checkpoint: true
+  invoke_dev_with: >-
+    最简实现：tasks 表新增 allocated_gpu_ids VARCHAR(64) 记录逗号串；
+    不引入 task_gpus 关联表；释放统一走 GPU.current_task_id 查询。
+
+# ===== Epic 4: WebSocket =====
+- id: "4-1"
+  title: WebSocket Manager 与端点
+  description: >-
+    ConnectionManager 单例；/ws/events 端点；lifespan 初始化。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "4-2"
+  title: 状态变更自动推送
+  description: >-
+    dispatcher + process_manager 所有状态变更点 broadcast()；覆盖 8+ 触发点。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "4-3"
+  title: Snapshot 与重连恢复
+  description: >-
+    连接后立即 snapshot；断线指数退避重连 + 重连后重新 snapshot。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "4-4"
+  title: 前端 WS 封装与 Store 联动
+  description: >-
+    ws/client.js + Pinia action 监听 → 自动更新 store。
+  spec_checkpoint: false
+  done_checkpoint: true
+
+# ===== Epic 5: 收尾 =====
+- id: "5-1"
+  title: 端到端冒烟测试
+  description: >-
+    pytest 脚本：创建 GPU → 提交 3 任务 → 排队 → 分配 → 完成 → 释放。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "5-2"
+  title: 并发安全集成测试
+  description: >-
+    1 GPU + 50 任务 → 1 RUNNING / 49 QUEUED / 仅 1 ALLOCATE 日志。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "5-3"
+  title: 手动演示 Checklist
+  description: >-
+    docs/DEMO.md：10 分钟脚本 + seed + 预期。
+  spec_checkpoint: false
+  done_checkpoint: false
+
+- id: "5-4"
+  title: 部署文档
+  description: >-
+    docs/DEPLOYMENT.md：环境、端口、服务注册、日志、排查。
+  spec_checkpoint: false
+  done_checkpoint: true

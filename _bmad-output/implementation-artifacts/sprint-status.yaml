@@ -1,0 +1,53 @@
+# Sprint Status — GPU Queue Allocation System MVP
+# generated: 2026-10-26 10:00
+# last_updated: 2026-10-26 10:00
+# project: compute-queue-allocation
+# project_key: GPUQ-MVP
+# tracking_system: file-system
+# story_location: "_bmad-output/specs/spec-gpu-queue-allocation/stories.yaml"
+
+development_status:
+  epic-1: in-progress
+  "1-1-后端初始化": ready-for-dev
+  "1-2-ORM与Repository": backlog
+  "1-3-FastAPI入口Lifespan": backlog
+  "1-4-异常CORS": backlog
+  "1-5-前端Vue初始化": ready-for-dev
+  "1-6-AGENTS与README": backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  "2-1-用户标识": backlog
+  "2-2-权限中间件": backlog
+  "2-3-GPU CRUD": backlog
+  "2-4-GPU状态校验": backlog
+  "2-5-GPU管理面板": backlog
+  "2-6-测试数据脚本": backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  "3-1-任务提交API": backlog
+  "3-2-任务列表详情": backlog
+  "3-3-FCFS调度器": backlog
+  "3-4-并发安全测试": backlog
+  "3-5-subprocess执行": backlog
+  "3-6-取消与终止": backlog
+  "3-7-任务提交页面": backlog
+  "3-8-任务列表WS页面": backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  "4-1-WS Manager": backlog
+  "4-2-状态推送": backlog
+  "4-3-Snapshot重连": backlog
+  "4-4-前端WS联动": backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog
+  "5-1-冒烟测试": backlog
+  "5-2-并发集成测试": backlog
+  "5-3-演示Checklist": backlog
+  "5-4-部署文档": backlog
+  epic-5-retrospective: optional
+
+action_items: []
