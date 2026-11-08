@@ -1,0 +1,5 @@
+story_id,participant,activity,start_time,end_time,minutes,defect_id,conflict_id,test_command,result,evidence,estimate_flag,notes
+3-6,A,开发实现,"","",120,"Win下reload导致子进程事件循环崩溃",无,"","","无原始终端截图，依托代码逻辑推断",回忆估算,"实验组：走BMAD完整规划。有严格的状态机约束与异常处理规范。"
+3-9,A,开发实现,"","",90,凑不齐N张卡时导致队首阻塞问题,跨型号混搭引发DDP straggler风险,"","","无原始终端截图，依托代码逻辑推断",回忆估算,"对照组：纯口述需求。采用了最简实现（逗号串记录多卡），未建关联表。队首阻塞在规格中属于FCFS预期行为，需作为设计取舍/风险核实，不直接视为已确认缺陷。"
+3-6,B,测试验证,"","","",Windows进程树残留风险(需taskkill/F/T),,pytest tests/test_tasks.py -v,pass,测试与部署手册场景6,真实执行,"验证任务能否被成功终止并释放GPU；当前仓库未附原始运行日志。"
+3-9,B,测试验证,"","","","","",pytest tests/test_multigpu.py -v,pass,测试与部署手册场景9(15个用例),真实执行,"验证多卡一次性分配、型号偏好与批量释放；当前仓库未附原始运行日志。"
