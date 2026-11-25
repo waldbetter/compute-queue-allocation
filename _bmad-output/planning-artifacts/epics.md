@@ -1,97 +1,440 @@
-# Epics — GPU Queue Allocation System MVP
-
+---
+status: final
+updated: 2026-11-25
+stepsCompleted:
+  - step-01-validate-prerequisites
+  - step-02-design-epics
+  - step-03-create-stories
+  - step-04-final-validation
+inputDocuments:
+  - "prds/prd-compute-queue-allocation-2026-11-25/prd.md"
+  - "architecture/ARCHITECTURE-SPINE.md"
+  - "../specs/spec-gpu-queue-allocation/SPEC.md"
+  - "../specs/spec-gpu-queue-allocation/api-contracts.md"
+  - "../specs/spec-gpu-queue-allocation/stories.yaml"
+  - "../../docs/test_plan.md"
+  - "../../docs/测试与部署手册.md"
+  - "../../docs/risk_lisk.md"
+  - "../../docs/architecture_review.md"
+  - "../../evidence/screenshots/test-logs/historical-results.md"
 ---
 
-## Epic 1：项目脚手架与基础后端
+# GPU 算力队列分配系统 Epic 与用户故事
 
-**目标**：搭建可运行的前后端骨架，MySQL 连通，数据库表创建，FastAPI 基础路由和 CORS，Vue 基础项目结构。为后续所有 Epic 提供基础设施。
+## 概览
 
-| ID | Story | 验收标准 |
-|----|-------|---------|
-| 1-1 | 后端项目初始化与数据库连接 | Python 3.11 + FastAPI + SQLAlchemy async + aiomysql；启动时连接 MySQL；DDL 可一键创建 4 张表；pytest-asyncio 可跑通一个假 DB session 获取测试 |
-| 1-2 | ORM 模型与 Repository 接口 | 四个 ORM 模型字段与 database-schema.md DDL 完全一致；domain 层定义抽象接口，infrastructure 层实现；依赖方向符合 AD-6 |
-| 1-3 | FastAPI 入口与 Lifespan | lifespan startup 初始化 DB pool + spawn dispatcher Task + init ProcessManager；shutdown cancel dispatcher + 释放资源；`uvicorn app.main:app` 启动无报错 |
-| 1-4 | 全局异常处理与 CORS | AppError 基类 + FastAPI exception_handler；CORS 允许 localhost:5173；未知异常记 ERROR 日志并返回 500 |
-| 1-5 | 前端 Vue 项目初始化 | Vue 3 + Vite + Pinia + Vue Router + Element Plus；`npm run dev` 启动；路由 /login /tasks /gpus /tasks/submit；axios + ws client 骨架 |
-| 1-6 | AGENTS.md 与项目 README | 项目根目录 AGENTS.md 含已知命令、约定、避免事项；docs/README.md 快速启动指南 |
+本文以 [PRD](prds/prd-compute-queue-allocation-2026-11-25/prd.md) 确定产品范围，以 [架构文档](architecture/ARCHITECTURE-SPINE.md)、[SPEC](../specs/spec-gpu-queue-allocation/SPEC.md)、[原 API 契约](../specs/spec-gpu-queue-allocation/api-contracts.md)、[现有 Story 清单](../specs/spec-gpu-queue-allocation/stories.yaml) 和源码核对实现与设计差异。保留原有 5 个 Epic 及 29 个 Story 编号。新增 Story 2-7 对应 GPU 占用保护，3-10 对应重启恢复。页面场景复用已有手册与截图。
 
----
+Story 状态表示源码、手册或计划的现状。验收标准描述目标结果。计划和补验场景尚无本次执行记录，历史通过记录见 [历史测试摘要](../../evidence/screenshots/test-logs/historical-results.md)。
 
-## Epic 2：用户与 GPU 资源管理
+### 如何追溯
 
-**目标**：实现 MVP 简化的用户标识、GPU 资源 CRUD 和状态管理。
+- 从需求表选择 FR 或 NFR，再通过对应 `AC` 链接定位到 Story 的 Given、When、Then 和用例。结合 Story 状态判断当前覆盖、计划或补验。
+- `FCFS`、`GPU`、`CON`、`MG`、`LIFE`、`CONS` 编号复用 [系统测试计划](../../docs/test_plan.md) §5。代码链接指向现有 pytest 函数。标为“部分”或“结果约束”的来源可提供子场景或断言。
+- “手册”定位 [测试与部署手册](../../docs/测试与部署手册.md) 的章节和现有手工场景。截图用于走查页面呈现和历史演示。[截图 01](../../evidence/screenshots/01-overview-13-gpu-idle.png) · [截图 02](../../evidence/screenshots/02-multigpu-running-2x4090.png) · [截图 03](../../evidence/screenshots/03-task-list-running-terminate.png) · [截图 04](../../evidence/screenshots/04-gpu-management-table.png)
+- `TC-<Story>-<场景序号>` 是待补用例编号。该用例的前置条件、操作和断言见同一行。已链接的自动化、手工场景和历史证据可复用。
 
-| ID | Story | 验收标准 |
-|----|-------|---------|
-| 2-1 | 用户创建与当前用户识别 | POST /users 创建测试用户；GET /users/me 返回当前用户；MVP session cookie 简化标识，跳过密码 |
-| 2-2 | 权限中间件 | FastAPI Depends 区分 member / admin；非 admin 访问 admin 路由返回 403 |
-| 2-3 | GPU 登记与 CRUD | POST/GET/PATCH /gpus 全部实现；admin 写操作校验 role；创建后默认 IDLE；name 有 UNIQUE 约束 |
-| 2-4 | GPU 状态转换校验 | RUNNING GPU 标记 MAINTENANCE → 400 "需先终止运行中的任务"；IDLE→MAINTENANCE、MAINTENANCE→IDLE、FAULTY→IDLE 合法 |
-| 2-5 | GPU 管理面板 Vue 页面 | /gpus Element Plus 表格；name/model/status/current_task_id 列；status Tag 着色；admin 行有维护操作按钮；点击后调用 PATCH API 刷新 |
-| 2-6 | 测试数据初始化脚本 | backend/seed.py 一键创建 1 admin + 2 member + 3 GPU (2×RTX 3090, 1×A100)，方便手动演示 |
+## 需求清单与追溯
 
----
+需求名称及优先级沿用 [PRD](prds/prd-compute-queue-allocation-2026-11-25/prd.md)。最后一列从 Story 编号直接链接到对应验收行。
 
-## Epic 3：任务排队与自动分配（核心 Epic）
+| 需求 | 内容 | 优先级 | Story 与验收编号 |
+| --- | --- | --- | --- |
+| FR-01 | Web 与 API 提交任务 | P0 | **1-5** [AC-1-5-01](#ac-1-5-01) · **2-6** [AC-2-6-01](#ac-2-6-01) · **3-1** [AC-3-1-01](#ac-3-1-01)、[AC-3-1-02](#ac-3-1-02) · **3-7** [AC-3-7-01](#ac-3-7-01) · **5-1** [AC-5-1-01](#ac-5-1-01) · **5-2** [AC-5-2-01](#ac-5-2-01) · **5-3** [AC-5-3-01](#ac-5-3-01)、[AC-5-3-02](#ac-5-3-02) |
+| FR-02 | FCFS 分配空闲 GPU | P0 | **1-3** [AC-1-3-01](#ac-1-3-01) · **3-3** [AC-3-3-01](#ac-3-3-01)、[AC-3-3-02](#ac-3-3-02) · **5-1** [AC-5-1-01](#ac-5-1-01) |
+| FR-03 | 同型号多卡整组分配 | P0 | **2-6** [AC-2-6-01](#ac-2-6-01) · **3-9** [AC-3-9-01](#ac-3-9-01)、[AC-3-9-02](#ac-3-9-02) · **5-3** [AC-5-3-01](#ac-5-3-01) |
+| FR-04 | 进程执行、退出与整组回收 | P0 | **1-3** [AC-1-3-01](#ac-1-3-01) · **3-5** [AC-3-5-01](#ac-3-5-01) · **3-9** [AC-3-9-02](#ac-3-9-02) · **3-10** [AC-3-10-01](#ac-3-10-01) · **5-1** [AC-5-1-01](#ac-5-1-01) · **5-3** [AC-5-3-02](#ac-5-3-02) |
+| FR-05 | 任务可视化与成员、管理员视图 | P0 | **1-5** [AC-1-5-01](#ac-1-5-01) · **2-2** [AC-2-2-01](#ac-2-2-01) · **3-2** [AC-3-2-01](#ac-3-2-01) · **3-8** [AC-3-8-01](#ac-3-8-01)、[AC-3-8-02](#ac-3-8-02) · **5-1** [AC-5-1-01](#ac-5-1-01) · **5-3** [AC-5-3-01](#ac-5-3-01)、[AC-5-3-02](#ac-5-3-02) |
+| FR-06 | 状态推送与重连恢复 | P1 | **4-1** [AC-4-1-01](#ac-4-1-01) · **4-2** [AC-4-2-01](#ac-4-2-01) · **4-3** [AC-4-3-01](#ac-4-3-01) · **4-4** [AC-4-4-01](#ac-4-4-01) |
+| FR-07 | 取消排队任务 | P0 | **2-2** [AC-2-2-01](#ac-2-2-01) · **3-6** [AC-3-6-01](#ac-3-6-01)、[AC-3-6-04](#ac-3-6-04) · **3-8** [AC-3-8-01](#ac-3-8-01) · **5-3** [AC-5-3-01](#ac-5-3-01) |
+| FR-08 | 终止已获卡任务 | P0 | **2-2** [AC-2-2-01](#ac-2-2-01) · **3-6** [AC-3-6-02](#ac-3-6-02)、[AC-3-6-04](#ac-3-6-04) · **3-8** [AC-3-8-01](#ac-3-8-01) · **3-9** [AC-3-9-02](#ac-3-9-02) · **3-10** [AC-3-10-01](#ac-3-10-01) · **5-3** [AC-5-3-01](#ac-5-3-01) |
+| FR-09 | 登记、查看和标记 GPU | P0 | **1-5** [AC-1-5-01](#ac-1-5-01) · **2-3** [AC-2-3-01](#ac-2-3-01) · **2-4** [AC-2-4-01](#ac-2-4-01) · **2-5** [AC-2-5-01](#ac-2-5-01) · **2-6** [AC-2-6-01](#ac-2-6-01) · **5-3** [AC-5-3-01](#ac-5-3-01) |
+| FR-10 | 管理员在 Web 修改 GPU | P1 | **2-2** [AC-2-2-01](#ac-2-2-01) · **2-5** [AC-2-5-02](#ac-2-5-02) |
+| FR-11 | 保护 GPU 占用状态 | P0 | **2-7** [AC-2-7-01](#ac-2-7-01)、[AC-2-7-02](#ac-2-7-02) |
+| FR-12 | 分配原子性与并发独占 | P0 | **1-2** [AC-1-2-01](#ac-1-2-01)、[AC-1-2-02](#ac-1-2-02) · **3-4** [AC-3-4-01](#ac-3-4-01)、[AC-3-4-02](#ac-3-4-02) · **5-2** [AC-5-2-01](#ac-5-2-01) |
+| FR-13 | 成员身份、归属与管理员授权 | P0（多人部署） | **2-1** [AC-2-1-01](#ac-2-1-01) · **2-2** [AC-2-2-01](#ac-2-2-01)、[AC-2-2-02](#ac-2-2-02) · **2-5** [AC-2-5-02](#ac-2-5-02) · **2-6** [AC-2-6-02](#ac-2-6-02) · **3-8** [AC-3-8-02](#ac-3-8-02) · **4-1** [AC-4-1-01](#ac-4-1-01) · **4-3** [AC-4-3-01](#ac-4-3-01) · **5-3** [AC-5-3-02](#ac-5-3-02) |
+| NFR-01 | 提交确认 ≤ 200 ms | P0 | **3-1** [AC-3-1-03](#ac-3-1-03) |
+| NFR-02 | GPU 释放到满足条件的队首启动 ≤ 1 s | P0 | **3-3** [AC-3-3-03](#ac-3-3-03) |
+| NFR-03 | 排队任务取消生效 ≤ 100 ms | P0 | **3-6** [AC-3-6-03](#ac-3-6-03) |
+| NFR-04 | 已连接客户端更新 ≤ 500 ms | P1 | **4-4** [AC-4-4-01](#ac-4-4-01) |
+| NFR-05 | 竞态和重启后状态一致 | P0 | **2-7** [AC-2-7-01](#ac-2-7-01)、[AC-2-7-02](#ac-2-7-02) · **3-6** [AC-3-6-04](#ac-3-6-04) · **3-10** [AC-3-10-01](#ac-3-10-01) |
+| NFR-06 | 目标物理机实际 GPU 映射一致 | P0 | **3-5** [AC-3-5-02](#ac-3-5-02) · **5-4** [AC-5-4-01](#ac-5-4-01) |
+| NFR-07 | 任务、GPU 分配和系统异常可追溯 | P1 | **1-1** [AC-1-1-01](#ac-1-1-01) · **1-2** [AC-1-2-01](#ac-1-2-01) · **1-3** [AC-1-3-01](#ac-1-3-01) · **1-4** [AC-1-4-01](#ac-1-4-01) · **1-6** [AC-1-6-01](#ac-1-6-01)、[AC-1-6-02](#ac-1-6-02) · **3-5** [AC-3-5-01](#ac-3-5-01) · **5-4** [AC-5-4-01](#ac-5-4-01) |
 
-**目标**：实现任务提交、FCFS 队列、调度器、subprocess 执行，完成 MVP 核心价值闭环。
+### 架构和业务约束
 
-| ID | Story | 验收标准 |
-|----|-------|---------|
-| 3-1 | 任务提交 API 与校验 | POST /tasks；gpu_count == 1 校验（否则 422）；QUEUED 状态；queue_position 即时查询；有空闲 GPU 时直接 PENDING |
-| 3-2 | 任务列表与详情 | GET /tasks（当前用户）/tasks/admin（全部）；GET /tasks/{id} 含 queue_position（由查询即时计算，不读冗余字段） |
-| 3-3 | FCFS 调度器 asyncio Task | dispatcher.py run_dispatcher() 实现 AD-1 的完整事务 SQL；FOR UPDATE 必须真正执行；subprocess 启动；主循环 ≤ 500ms；lifespan 注册 |
-| 3-4 | 并发分配安全单元测试 | 真实 MySQL（Testcontainers）；1 张 IDLE GPU + N=50 并发调度请求；验证仅 1 条 ALLOCATE 日志 + GPU status=ALLOCATED + 其余 N-1 收到 1205 后后端返回 409；N=100 同样覆盖 |
-| 3-5 | subprocess 执行与监控 | ProcessManager 用 asyncio.create_subprocess_exec；注入 CUDA_VISIBLE_DEVICES=分配到的 GPU id；stdout/stderr 写 logs/{task_id}.log；exit 0→COMPLETED，exit≠0→FAILED；释放 GPU 回 IDLE + 写 allocation_log(RELEASE) |
-| 3-6 | 任务取消与终止 | POST /tasks/{id}/cancel：仅 owner 且 QUEUED/PENDING；GPU 已分配则释放；POST /tasks/{id}/terminate：admin-only；subprocess 发送 SIGTERM（Windows 用 taskkill）；进程结束后 TERMINATED |
-| 3-7 | 任务提交 Vue 页面 | /tasks/submit Element Plus 表单；name(command/gpu_count=1 disabled/model_preference 下拉/estimated_duration 数字)；提交后跳转任务列表 |
-| 3-8 | 任务列表 Vue 页面 + WS | /tasks Element Plus 表格；列含 status(tag)/queue_position/exit_code；"取消" 按钮按条件显示；连接 WS → 事件触发 Pinia action → 自动重渲染 |
-| 3-9 | 多卡同型号分配（Post-MVP） | gpu_count 1-N（同型号组队）；dispatcher 按型号偏好或最早空闲卡型号一次性锁 N 张同型号 IDLE 卡（FOR UPDATE），凑不齐队首阻塞；CUDA_VISIBLE_DEVICES 注入逗号串；释放按 current_task_id 批量；tasks.allocated_gpu_ids 记录逗号串（不建关联表） |
+- **BC-01、BC-04、AD-3**。保留单物理机、单后端工作进程与本机子进程执行。启动和读写验证沿用当前部署材料，实际设备映射和退出行为在目标物理机补验。
+- **BC-02、BC-03、AD-1、AD-2、ADR-8**。分配遵循全局 FCFS 和整组同型号规则。MySQL 行锁与事务覆盖任务、GPU 绑定和逐卡记录。调度的队首从 `QUEUED` 中选择。查询按 PRD 保留全局活跃序号的当前口径。
+- **AD-4、AD-6**。已有 ORM 和直接数据访问。Repository 抽象和分层属于原架构设计，是否继续实施由架构责任人确认，验收锚点在 1-2。
+- **AD-5、AD-7**。状态推送以已提交的数据与角色可见范围为准。现有 HTTP 路由用于演示验收，版本前缀、响应封装和 GPU 详情路由差异按 O-01 确认。
+- **BC-05**。范围沿用 PRD。SQLite 用于功能验证。MySQL 并发用例包含建表与删表，执行前须将测试连接显式绑定到可丢弃专用库、确认库名保护，并停用使用同库的业务实例。仅设置应用 `DATABASE_URL` 不会改变当前并发测试的固定连接。 [测试计划](../../docs/test_plan.md) · [架构评审](../../docs/architecture_review.md) · [风险清单](../../docs/risk_lisk.md)
 
----
+### PRD 待确认事项
 
-## Epic 4：WebSocket 实时推送
+| 编号 | 影响的 Story | 验收口径 |
+| --- | --- | --- |
+| O-01 | 1-4、2-3、3-4、5-2 | 当前以任务入队、后台争用及未获卡继续等待为口径。HTTP 409 的争用接口、API 前缀、响应封装和 GPU 详情契约待确认。 |
+| O-02 | 3-6、3-8 | 当前取消限 `QUEUED`，终止限 `PENDING`、`RUNNING`。状态边界变更时，同步复核接口、页面和授权用例。 |
+| O-03 | 3-5、5-4 | 部署系统及物理映射待确认。当前源码注入数据库 GPU ID，SPEC 约定零基索引。验收核对可见设备 UUID、数量和实际占用。 |
+| O-04 | 2-1、2-2、2-5、2-7、3-8、3-10、Epic 4 | 多人部署门槛及交付批次沿用 PRD 待确认状态。 |
+| O-05 | 3-1、3-3、3-6、3-9、4-4 | 性能试验记录平台、负载、采样窗口及原始样本。64 是 API 请求值上限，若纳入 64 卡实配需补验完整 ID 持久化和释放。 |
 
-**目标**：完成 CAP-3 所需的实时推送基础设施。Epic 3 最后一个 Story (3-8) 依赖 Epic 4 的基础设施。
+## Epic 清单
 
-| ID | Story | 验收标准 |
-|----|-------|---------|
-| 4-1 | ConnectionManager 基础设施 | utils/websocket_manager.py 单例；connect/disconnect/broadcast/send_task 方法；FastAPI /ws/events 端点；lifespan startup 初始化 |
-| 4-2 | 状态变更自动推送 | Dispatcher + ProcessManager 的所有状态变更点 broadcast(event, data)；至少覆盖 8 个触发点（QUEUED/PENDING/RUNNING/COMPLETED/FAILED/CANCELLED/TERMINATED/GPU status） |
-| 4-3 | Snapshot 与重连恢复 | 连接后立即 snapshot（当前所有 tasks + gpus）；前端断线指数退避重连；重连后重新 snapshot 补全状态 |
-| 4-4 | 前端 WS 封装与 Store 联动 | frontend/src/ws/client.js 封装 connect/on/disconnect；Pinia tasks store 监听 WS 事件自动更新；mock 测试通过 |
+| Epic | 主题 | 可验收成果 | Story |
+| --- | --- | --- | --- |
+| 1 | 环境启动与首次上手 | 开发和运维可启动单机环境、打开 Web、确认后端与数据库就绪并定位常见故障。 | 1-1、1-2、1-3、1-4、1-5、1-6 |
+| 2 | 成员身份与 GPU 资源管理 | 运维可登记、查看和维护 GPU。多人使用时，成员与管理员拥有可验证的操作边界。 | 2-1、2-2、2-3、2-4、2-5、2-6、2-7 |
+| 3 | 任务排队、执行与回收 | 成员可提交单卡或同型号多卡任务、查看进度并取消排队任务，管理员可终止任务。现有轮询支持独立验收。 | 3-1、3-2、3-3、3-4、3-5、3-6、3-7、3-8、3-9、3-10 |
+| 4 | 任务和 GPU 状态实时更新 | 成员和管理员可接收授权范围内的状态和队列更新，连接恢复后可继续查看最新数据。 | 4-1、4-2、4-3、4-4 |
+| 5 | 系统验收与部署交接 | 测试和运维可复用现有手册及测试证据，验证完整链路并记录目标环境的结果。 | 5-1、5-2、5-3、5-4 |
 
----
+演示主链路以 Epic 1 的启动环境、Epic 2 的现有资源 API 和只读面板为基础。Epic 3 的任务页面可独立使用轮询。多人权限用例依赖 2-1、2-2，WebSocket 在此基础上增加授权连接、状态事件与快照恢复。Epic 5 根据目标环境复验前述成果。
 
-## Epic 5：整合测试与 MVP 收尾
+## Epic 1 环境启动与首次上手
 
-| ID | Story | 验收标准 |
-|----|-------|---------|
-| 5-1 | 端到端冒烟测试 | pytest 脚本：创建 GPU → 提交 3 任务 → 验证排队顺序 → 等待第一个 RUNNING → 验证 COMPLETED + GPU 释放 → 第二个自动分配；全流程 PASS |
-| 5-2 | 并发安全集成测试 | 1 张 GPU + 提交 50 任务 → 最终 1 RUNNING / 49 QUEUED → allocation_log 恰好 1 条 ALLOCATE |
-| 5-3 | 手动演示 Checklist | docs/DEMO.md：10 分钟演示脚本 + seed 数据初始化 + 操作步骤 + 预期观察 |
-| 5-4 | 部署文档 | docs/DEPLOYMENT.md：环境要求、端口、systemd 或 Windows 服务注册、日志轮转、常见错误排查 |
+开发和运维可启动单机环境、打开 Web、确认后端与数据库就绪并定位常见故障。
 
----
+### Story 1-1 初始化数据库并验证连接
 
-## 并行开发建议
+作为开发者，我希望在专用 MySQL 库初始化四张表并检查连接，以便后续流程可以持久化任务和 GPU 状态。
 
-```
-批次 1（可同时开工）：
-  后端 1-1 / 前端 1-5
+**状态** 已实现，MySQL 部署待验。**关联** NFR-07、BC-01。
 
-批次 2（1-1 完成后）：
-  1-2 → 1-3 → 1-4 / 并行 2-1, 2-2, 2-3
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-1-1-01"></a>`AC-1-1-01` | NFR-07、BC-01 | 已准备空的专用 MySQL 库与有效的 `DATABASE_URL` | 执行现有初始化入口（不传 `--reset`）并完成一次数据库读写，再以相同方式执行初始化 | 四张业务表均可访问，读写成功，重复初始化保留原有记录 | 手册 §5.3、§6.2 · 代码 [test_db_session_lifecycle](../../backend/tests/test_config_and_db.py#L6)（SQLite 部分） · `TC-1-1-01` 待补 |
 
-批次 3（2-3 完成后）：
-  3-1, 3-2 / 并行 4-1
+### Story 1-2 校验核心模型和数据访问边界
 
-批次 4（3-3 spec_checkpoint 确认后）：
-  3-3 → 3-4 → 3-5 → 3-6
+作为维护者，我希望核对用户、GPU、任务与分配日志的持久化模型，以便关键关联和状态可可靠保存，数据访问可独立验证。
 
-批次 5（4-2 完成后）：
-  3-8, 4-4
+**状态** 部分实现，架构差异待确认。**关联** FR-12、NFR-07、AD-4、AD-6。
 
-批次 6（全部 Epic 完成后）：
-  5-1, 5-2, 5-3, 5-4
-```
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-1-2-01"></a>`AC-1-2-01` | FR-12、NFR-07、AD-4、AD-6 | 数据库已初始化，具备用户、任务、GPU 和分配记录样本 | 保存并重新查询状态、已分配 GPU 标识及分配记录 | 记录可按任务与卡核对，重复 GPU 名被拒绝，任务状态和日志动作可往返保存 | `CONS-01` `CONS-02` `CONS-03` · 代码 [test_gpu_unique_name](../../backend/tests/test_models.py#L44) [test_task_enum_roundtrip](../../backend/tests/test_models.py#L88) [test_allocation_log_enum](../../backend/tests/test_models.py#L107) [test_task_allocated_gpu_ids_roundtrip](../../backend/tests/test_multigpu.py#L308) |
+| <a name="ac-1-2-02"></a>`AC-1-2-02` | FR-12、AD-4、AD-6 | 架构责任人确认仍保留原 Repository 拆分设计 | 检查依赖方向并通过替代数据访问实现运行领域测试 | 领域层依赖抽象接口，MySQL 实现在基础设施层，领域测试可替换实现 | `TC-1-2-02` 待补 |
+
+### Story 1-3 启动与停止单机服务
+
+作为运维人员，我希望通过一个后端工作进程启动任务调度，以便服务可确认存活并有序停止后台工作。
+
+**状态** 部分实现，停机回写见 3-10。**关联** FR-02、FR-04、NFR-07、BC-01、AD-3。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-1-3-01"></a>`AC-1-3-01` | FR-02、FR-04、NFR-07、BC-01、AD-3 | 已配置可用数据库，使用单工作进程运行 | 启动服务后访问 `/health`，检查后台实例，再正常停止服务 | 健康接口返回 200 和 `ok`，调度器和进程管理器各启动一个实例并按生命周期退出 | 手册 §5.3 · 代码 [test_health_check_returns_ok](../../backend/tests/test_health.py#L46) [test_pm_stop_kills_active_processes](../../backend/tests/test_process_manager.py#L159)（部分） · `TC-1-3-01` 待补 |
+
+### Story 1-4 看懂请求错误并定位服务异常
+
+作为开发者，我希望从前端收到可识别的错误并在服务端定位异常，以便我能判断是输入问题、业务冲突还是服务异常。
+
+**状态** 已实现，错误契约待复验。**关联** NFR-07、AD-7。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-1-4-01"></a>`AC-1-4-01` | NFR-07、AD-7 | 允许的本机 Web 来源和可控的测试请求已准备 | 发起预检，然后分别触发输入错误、已定义业务冲突与未处理异常 | 预检允许配置来源，输入返回对应 4xx，业务冲突返回 409，未知异常返回通用 500 并记录诊断日志 | 代码 [test_cors_headers_present](../../backend/tests/test_health.py#L59) [test_validation_400](../../backend/tests/test_health.py#L89) [test_create_gpu_name_conflict](../../backend/tests/test_gpus.py#L57) [test_unknown_exception_500](../../backend/tests/test_health.py#L96) · `TC-1-4-01` 待补（日志断言） |
+
+### Story 1-5 打开 Web 并切换业务页面
+
+作为成员，我希望打开概览、任务和 GPU 管理视图，以便无需命令行即可使用日常功能。
+
+**状态** 现有导航已实现。**关联** FR-01、FR-05、FR-09、BC-01。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-1-5-01"></a>`AC-1-5-01` | FR-01、FR-05、FR-09、BC-01 | 本机前端和后端已启动 | 打开 Web，切换 Overview、Tasks、GPUs，再模拟后端不可达 | 三个视图可打开，概览有提交入口和 GPU 状态，后端是否可达有对应提示 | 手册 §5.2–5.3、§7 · `TC-1-5-01` 待补（断连行为） |
+
+### Story 1-6 从项目说明找到启动和维护指引
+
+作为新维护者，我希望从仓库入口找到现有 README 和运维步骤，以便可以按统一说明配置、启动并排查。
+
+**状态** 部分实现，AGENTS.md 交付待确认。**关联** NFR-07、BC-01。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-1-6-01"></a>`AC-1-6-01` | NFR-07、BC-01 | 维护者从干净工作区接手且拥有可丢弃的测试库 | 按 README 与现有手册核对依赖、启动、验证和排查步骤 | 能从仓库找到实际文件和命令，核对到 Web、后端健康响应、数据库及日志位置 | 手册 §3–6、§10 · `TC-1-6-01` 待补（文档走查） |
+| <a name="ac-1-6-02"></a>`AC-1-6-02` | NFR-07 | 确认需要交付仓库级代理指引 | 从仓库根目录按 `AGENTS.md` 的说明定位测试与启动命令 | 命令和路径可核验，说明包含测试库边界和常见执行问题 | `TC-1-6-02` 待补 |
+
+## Epic 2 成员身份与 GPU 资源管理
+
+运维可登记、查看和维护 GPU。多人使用时，成员与管理员拥有可验证的操作边界。
+
+### Story 2-1 建立成员会话并识别当前身份
+
+作为组内成员，我希望登录并获取当前账号信息，以便提交的任务可以归属于正确成员。
+
+**状态** 计划。**关联** FR-13、BC-04。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-2-1-01"></a>`AC-2-1-01` | FR-13、BC-04 | 已配置两名成员与一名管理员，另有一个无会话客户端 | 分别登录并请求当前用户接口，再以无会话客户端请求受保护资源 | 接口返回与会话对应的用户及角色，未登录请求返回 401 | `TC-2-1-01` 待补 |
+
+### Story 2-2 执行成员归属和管理员权限校验
+
+作为组内管理员，我希望按会话身份授权读取和管理操作，以便其他成员的任务及高权限入口得到保护。
+
+**状态** 计划。**关联** FR-13、FR-05、FR-07、FR-08、FR-10。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-2-2-01"></a>`AC-2-2-01` | FR-13、FR-05、FR-07、FR-08、FR-10 | 2-1 的两名成员各拥有一个排队任务，并有管理员会话 | 以成员身份提交时传入他人 ID，列出任务，尝试查看或取消他人任务、读取全量列表、终止任务以及登记或修改 GPU | 任务归属由会话决定，成员的直接查询和取消无法访问其他成员任务，管理员专属操作返回 403，任务及卡无越权变更 | `TC-2-2-01` 待补 |
+| <a name="ac-2-2-02"></a>`AC-2-2-02` | FR-13 | 已有管理员、个人任务、可终止任务及可维护 GPU | 使用管理员会话读取全量任务并执行授权的终止和 GPU 写入 | 管理员可读取全量记录，获得授权的写入按业务状态规则处理 | `TC-2-2-02` 待补 |
+
+### Story 2-3 通过 API 登记、查找和更新 GPU
+
+作为运维人员，我希望按型号、显存和唯一名称登记 GPU 并查询资源，以便资源池能正确反映已登记的卡和维护备注。
+
+**状态** API 已实现，授权见 2-2。**关联** FR-09。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-2-3-01"></a>`AC-2-3-01` | FR-09 | 专用环境中有三张不同状态的登记卡，并已准备一个可用名称 | 登记显存为正的新卡，按相同名称重试，再按状态分页查询并更新备注 | 首次返回 201 且为 `IDLE`，重名返回 409，查询仅返回目标状态和指定页，备注可保存 | 代码 [test_create_gpu_success](../../backend/tests/test_gpus.py#L46) [test_create_gpu_name_conflict](../../backend/tests/test_gpus.py#L57) [test_list_gpus_default_page](../../backend/tests/test_gpus.py#L175) [test_list_gpus_status_filter](../../backend/tests/test_gpus.py#L183) [test_update_gpu_notes_only](../../backend/tests/test_gpus.py#L85) · 手册 §7.3 |
+
+### Story 2-4 标记 GPU 维护或故障并恢复可用
+
+作为运维人员，我希望按 GPU 当前状态切换维护和故障标记，以便调度只使用可用卡。
+
+**状态** 基本规则已实现。**关联** FR-09、BC-03。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-2-4-01"></a>`AC-2-4-01` | FR-09、BC-03 | 有一张运行卡以及可用于维护、故障测试的空闲卡 | 尝试把运行卡切为 `MAINTENANCE` 或 `FAULTY`，再将空闲卡标记、尝试分配并恢复为 `IDLE` | 运行卡的修改返回 400 且原状态保留，维护和故障卡未获分配，恢复后可被调度 | `GPU-06` · 代码 [test_update_gpu_running_to_maintenance_rejected](../../backend/tests/test_gpus.py#L125) [test_update_gpu_running_to_faulty_rejected](../../backend/tests/test_gpus.py#L133) [test_update_gpu_idle_to_maintenance_allowed](../../backend/tests/test_gpus.py#L140)（部分） · `TC-2-4-01` 待补（恢复及调度过滤） |
+
+### Story 2-5 查看 GPU 面板并执行维护操作
+
+作为管理员，我希望在 Web 查看 GPU 资源并执行登记与维护，以便日常管理可在同一页面完成。
+
+**状态** 部分实现，写操作计划。**关联** FR-09、FR-10、FR-13。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-2-5-01"></a>`AC-2-5-01` | FR-09 | 有包含空闲卡与占用卡的资源池 | 打开 GPU 管理页并刷新 | 每行可查名称、型号、显存、状态、当前任务及备注 | 手册 §7.3 · 截图 04 |
+| <a name="ac-2-5-02"></a>`AC-2-5-02` | FR-10、FR-13 | 管理员和普通成员均已登录，2-2 的授权可用 | 管理员在页面登记 GPU、标记维护和故障、恢复可用并更新备注，再尝试维护运行卡，同时让普通成员尝试写入 | 管理员的合法改动刷新后保留，运行卡的维护被拒绝且页面显示原因，成员的写入被拒绝 | `TC-2-5-02` 待补 |
+
+### Story 2-6 准备可重复的演示数据
+
+作为测试人员，我希望用现有初始化入口和专用测试数据复现演示场景，以便手工验证具备固定的用户和 GPU 基线。
+
+**状态** 部分实现，已有建表入口和手工材料。**关联** FR-01、FR-03、FR-09、BC-01、FR-13。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-2-6-01"></a>`AC-2-6-01` | FR-01、FR-03、FR-09、BC-01 | 空的专用演示库已创建 | 使用现有初始化入口和手册写入演示账号与 GPU，再查询数据 | 默认提交账号有效，至少两张登记卡同型号且可用于双卡演示，预计数量和初始状态可核对 | 手册 §6、§8 · `TC-2-6-01` 待补（固化演示数据） |
+| <a name="ac-2-6-02"></a>`AC-2-6-02` | FR-13 | 多人版会话可以使用 | 初始化演示成员和管理员后逐一查验身份 | 具备两个普通成员和一个管理员，角色分别正确 | `TC-2-6-02` 待补 |
+
+### Story 2-7 保护已分配 GPU 的占用状态
+
+作为管理员，我希望维护操作与调度争用同一卡时得到确定结果，以便卡的维护状态和任务绑定保持一致。
+
+**状态** 拟补强。**关联** FR-11、NFR-05、BC-03。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-2-7-01"></a>`AC-2-7-01` | FR-11、NFR-05、BC-03 | 一张 `ALLOCATED` 或 `RUNNING` 卡已与有效任务绑定 | 通过管理 API 尝试直接改为 `IDLE` | 请求被拒绝，GPU 状态及任务绑定保持原值 | `CONS-01` `CONS-06`（结果约束） · `TC-2-7-01` 待补 |
+| <a name="ac-2-7-02"></a>`AC-2-7-02` | FR-11、NFR-05、BC-03 | 一张空闲卡与一个可调度任务同时就绪 | 在隔离 MySQL 中并发发起维护和分配并重复两种获锁次序 | GPU 处于维护且无任务绑定，或分配成功且维护请求被拒绝，任一结果均无空闲带绑定或维护带占用 | `CONS-01` `CONS-06`（结果约束） · `TC-2-7-02` 待补 |
+
+## Epic 3 任务排队、执行与回收
+
+成员可提交单卡或同型号多卡任务、查看进度并取消排队任务，管理员可终止任务。现有轮询支持独立验收。
+
+### Story 3-1 提交任务并校验输入
+
+作为成员，我希望通过提交接口登记任务，以便合法需求进入队列，无效输入得到明确反馈。
+
+**状态** 已实现，性能待测。**关联** FR-01、NFR-01。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-3-1-01"></a>`AC-3-1-01` | FR-01 | 调度暂停，提交账号有效 | 提交名称、命令及可选型号，分别省略卡数、传入多卡数量与 64 | 合法请求返回 201、任务 ID 和 `QUEUED`，可按 ID 查询，默认卡数为 1，64 作为合法请求值受理 | `LIFE-01` `MG-07` · 代码 [test_create_task_default_user](../../backend/tests/test_tasks.py#L63) [test_create_task_accepts_valid_gpu_count](../../backend/tests/test_multigpu.py#L295) |
+| <a name="ac-3-1-02"></a>`AC-3-1-02` | FR-01 | 存在有效提交账号且已记录当前任务数 | 分别提交空名称、超 128 字符名称、空命令、0 张卡和 65 张卡 | 每个请求均返回 422，任务数不增加 | `MG-06` · 代码 [test_create_task_rejects_bad_gpu_count](../../backend/tests/test_multigpu.py#L286)（卡数） · `TC-3-1-02` 待补（名称、命令与无写入） |
+| <a name="ac-3-1-03"></a>`AC-3-1-03` | NFR-01 | 已记录服务器、GPU、MySQL 和负载，准备合法请求 | 测量客户端发出请求到完整收到 201 的耗时 | 逐样本比较 200 ms，记录原始耗时及失败数，统一统计口径见 O-05 | `TC-3-1-03` 待补 |
+
+### Story 3-2 查询任务列表、详情和队列位置
+
+作为成员，我希望查询任务状态和退出结果，以便能区分还在排队的任务与已结束的任务。
+
+**状态** 查询已实现，权限见 2-2。**关联** FR-05。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-3-2-01"></a>`AC-3-2-01` | FR-05 | 队列含不同用户的活跃和终态任务，其中两个活跃任务提交时间相同 | 按当前查询口径请求指定用户列表、全量列表和详情，再请求不存在的 ID | 列表按查询及分页条件返回，活跃序号按提交时间及 ID 从 1 起计算并计入 `QUEUED`、`PENDING`、`RUNNING`，详情提供起止时间和退出码，终态序号为空，不存在的 ID 返回 404 | 代码 [test_list_my_tasks_pagination](../../backend/tests/test_tasks.py#L122) [test_admin_list_all](../../backend/tests/test_tasks.py#L147) [test_get_task_detail](../../backend/tests/test_tasks.py#L168) [test_get_task_not_found](../../backend/tests/test_tasks.py#L178) [test_queue_position_active_vs_terminal](../../backend/tests/test_tasks.py#L194) [test_queue_position_in_list](../../backend/tests/test_tasks.py#L211) · `TC-3-2-01` 待补（并列序号及详情字段） |
+
+### Story 3-3 按 FCFS 自动分配下一任务
+
+作为成员，我希望资源空闲后按提交顺序获得 GPU，以便排队顺序可预测。
+
+**状态** 已实现，启动时延待测。**关联** FR-02、BC-02、BC-03、AD-2、AD-3、NFR-02。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-3-3-01"></a>`AC-3-3-01` | FR-02、BC-02、BC-03、AD-2、AD-3 | 有足够空闲卡、多个排队任务、两条相同时间的提交及一条已分配任务 | 执行调度并根据实际状态和绑定核对分配顺序 | 仅从 `QUEUED` 取任务，按提交时间和 ID 升序分配，单卡选 ID 最小的 `IDLE` 卡，已分配任务不重复获卡 | `FCFS-01` `FCFS-02` `FCFS-04` `GPU-01` `GPU-03` · 代码 [test_dispatcher_fcfs_multiple](../../backend/tests/test_dispatcher.py#L124) [test_dispatcher_skips_non_queued_tasks](../../backend/tests/test_dispatcher.py#L156) [test_dispatcher_does_not_double_allocate](../../backend/tests/test_dispatcher.py#L100) [test_single_gpu_task_unchanged](../../backend/tests/test_multigpu.py#L173) · `TC-3-3-01` 待补（同时间断言） |
+| <a name="ac-3-3-02"></a>`AC-3-3-02` | FR-02、BC-03 | 所有 GPU 均为非 `IDLE`，且有排队任务 | 执行一轮调度 | 队首保持 `QUEUED`，没有新增分配记录 | `GPU-02` · 代码 [test_dispatcher_no_idle_gpu](../../backend/tests/test_dispatcher.py#L43) |
+| <a name="ac-3-3-03"></a>`AC-3-3-03` | NFR-02 | 队首任务已排队、即将释放的 GPU 能满足所需资源且命令可启动 | 以 GPU 释放事务提交为起点，测到队首 `RUNNING` 持久化 | 记录分配和启动时间，逐样本比较 1 s，统一统计口径见 O-05 | `TC-3-3-03` 待补 |
+
+### Story 3-4 验证分配事务和并发独占
+
+作为测试人员，我希望验证行锁、单次分配及失败时回滚，以便并发请求不会导致重复绑定或部分写入。
+
+**状态** 部分实现，MySQL 补验。**关联** FR-12、AD-1。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-3-4-01"></a>`AC-3-4-01` | FR-12、AD-1 | 使用专用可丢弃 MySQL 库，确认连接及库名保护、隔离级别 `REPEATABLE READ`，且同库业务后端已停止 | 分别并发触发 50 次和 100 次单卡分配，再验证 2 张空闲卡、30 个排队任务的场景，测试期间不释放 GPU | 1 张卡的场景各只有 1 个绑定和 1 条 `ALLOCATE`，未获卡任务分别为 49 和 99 个 `QUEUED`。两卡场景恰好 2 个绑定和 2 条分配记录，任务、卡和日志一致 | `CON-01` `CON-02` `CON-03` `CONS-03` · 代码 [test_concurrent_allocation_single_gpu](../../backend/tests/test_dispatcher_concurrency.py#L107) [test_concurrent_allocation_two_gpus](../../backend/tests/test_dispatcher_concurrency.py#L163) [test_concurrent_no_double_allocation](../../backend/tests/test_dispatcher_concurrency.py#L216) · `TC-3-4-01` 待补（100 路的 99 个等待及连接保护） |
+| <a name="ac-3-4-02"></a>`AC-3-4-02` | FR-12、AD-1 | 一个队首任务可分配两张卡，两张卡及日志均处于初始状态 | 在任务、卡和日志的分配写入之后、事务提交之前注入异常，再读取三类数据 | 任务仍为 `QUEUED`，两卡均 `IDLE` 且无绑定，无残留 `ALLOCATE`，恢复后允许成功重试 | `CONS-01` `CONS-03` `CONS-06`（结果约束） · `TC-3-4-02` 待补 |
+
+### Story 3-5 运行命令并记录退出结果
+
+作为成员，我希望让已分配的任务自动启动并产出可查结果，以便任务完成或失败后资源可以继续使用。
+
+**状态** 业务路径已实现，CUDA 映射待验。**关联** FR-04、NFR-07、BC-04、NFR-06。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-3-5-01"></a>`AC-3-5-01` | FR-04、NFR-07、BC-04 | 任务已为 `PENDING`，GPU 为 `ALLOCATED` 并已绑定任务 | 分别执行退出码为 0、非 0 以及无法启动的命令，按任务 ID 查询输出及数据库记录 | 能启动的任务与 GPU 进入 `RUNNING` 并记录开始时间，三种执行最终分别为 `COMPLETED`、`FAILED`、`FAILED`。已启动命令的输出可定位，任务记录结束及退出结果，逐卡写 `RELEASE`、清绑定并恢复 `IDLE` | `LIFE-02` `LIFE-03` `LIFE-04` `LIFE-05` `LIFE-08` `CONS-04` `CONS-05` `CONS-06` · 手册 §8 场景 01–03、07 · 代码 [test_pm_launches_pending_to_running](../../backend/tests/test_process_manager.py#L51) [test_pm_process_exit_zero_becomes_completed](../../backend/tests/test_process_manager.py#L76) [test_pm_process_exit_nonzero_becomes_failed](../../backend/tests/test_process_manager.py#L110) [test_pm_launch_failure_reclaims_gpu](../../backend/tests/test_process_manager.py#L135) [test_pm_log_file_created](../../backend/tests/test_process_manager.py#L227) |
+| <a name="ac-3-5-02"></a>`AC-3-5-02` | NFR-06、BC-04 | O-03 已选定目标系统和设备映射，真实 NVIDIA 卡已登记，并准备受控 CUDA 探针 | 分别运行单卡、双卡探针，记录任务可见设备及物理占用，再终止一个运行任务 | 可见 GPU 的 UUID 集合、数量和占用与登记的实际分配一致，终止后无残留进程。Windows 验证进程树，Linux 按最终平台补验 | 手册 §8 场景 06、08（部分） · `TC-3-5-02` 待补（实机 UUID 与终止） |
+
+### Story 3-6 取消排队任务或终止占用任务
+
+作为成员或管理员，我希望取消等待中的任务或停止已获卡任务，以便释放队列位置或回收资源。
+
+**状态** 部分实现，权限与竞态待补。**关联** FR-07、FR-08、NFR-03、NFR-05。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-3-6-01"></a>`AC-3-6-01` | FR-07 | 有一个排队任务及处于 `PENDING`、`RUNNING` 和终态的样本 | 分别调用取消操作 | `QUEUED` 变为 `CANCELLED` 并记录结束时间和移除活跃序号，后续不予分配，其余状态返回 400 | `LIFE-06` · 手册 §8 场景 04 · 代码 [test_cancel_queued_task_success](../../backend/tests/test_tasks.py#L231) [test_cancel_rejects_non_queued](../../backend/tests/test_tasks.py#L263) [test_cancelled_task_not_dispatched](../../backend/tests/test_tasks.py#L280) |
+| <a name="ac-3-6-02"></a>`AC-3-6-02` | FR-08 | 一个任务 `PENDING`，另一个双卡任务 `RUNNING` 并有可观察的进程树，另有排队与终态样本 | 分别调用终止并检查进程、绑定和日志，再对已终止任务重试 | `PENDING` 终止后不启动命令。运行任务实际退出后转为 `TERMINATED`，全部卡可用且逐卡只有一条释放日志。排队和终态请求返回 400 | `LIFE-07` `LIFE-09` `CONS-04` `CONS-05` `CONS-06` · 手册 §8 场景 06（运行路径） · `TC-3-6-02` 待补（PENDING、终态与双卡） |
+| <a name="ac-3-6-03"></a>`AC-3-6-03` | NFR-03 | 任务处于 `QUEUED` 且环境与采样窗口已记录 | 从服务端接收取消请求测到 `CANCELLED` 事务提交 | 逐样本比较 100 ms，复查后续无分配，统一统计口径见 O-05 | `TC-3-6-03` 待补 |
+| <a name="ac-3-6-04"></a>`AC-3-6-04` | FR-07、FR-08、NFR-05 | 隔离 MySQL 中有排队任务、待启动任务和带可观察进程的运行任务 | 分别制造取消与分配、终止与启动的竞争，并模拟运行进程失联或终止超时 | 取消成功则无分配，分配成功则取消被拒。终止路径的进程、任务和逐卡记录一致且无重复释放，未确认进程退出的卡保持不可重新分配 | `CONS-01` `CONS-04` `CONS-06`（结果约束） · `TC-3-6-04` 待补 |
+
+### Story 3-7 从概览页提交 GPU 任务
+
+作为成员，我希望通过表单提交名称、命令、卡数和可选型号，以便可以确认任务已受理并找到任务记录。
+
+**状态** 已实现，页面回归待验。**关联** FR-01。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-3-7-01"></a>`AC-3-7-01` | FR-01 | Web 在线，测试环境中有至少两张同型号卡且调度先暂停 | 验证名称或命令缺失的表单，再提交一个合法双卡任务并查看任务列表 | 缺失必填项时有校验反馈。合法提交显示成功，可在任务列表找到同名且请求两张卡的任务 | 手册 §7.1、§8 场景 08（部分） · 截图 01 · `TC-3-7-01` 待补（完整表单验证） |
+
+### Story 3-8 在任务页面查看进度和结果
+
+作为成员，我希望从任务列表查看状态、序号、GPU 和执行结果，以便能知道请求的当前位置及结果。
+
+**状态** 部分实现，完整详情与角色视图计划。**关联** FR-05、FR-07、FR-08、FR-13。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-3-8-01"></a>`AC-3-8-01` | FR-05、FR-07、FR-08 | 有排队、运行和已完成样本，页面已打开 | 让后台推进状态，等待下一次成功轮询，再查看执行按钮 | 页面更新状态、活跃序号、关联 GPU、提交时间和可计算的运行时长，取消和终止按钮的可用状态符合当前规则 | 手册 §7.2、§8 场景 04、06 · 截图 03 · `TC-3-8-01` 待补（轮询断言） |
+| <a name="ac-3-8-02"></a>`AC-3-8-02` | FR-05、FR-13 | 2-1、2-2 可用，两名成员均有历史任务，管理员也已登录 | 成员切换到自己的任务详情，管理员切换到全量视图 | 成员只能查看自己任务的状态、起止时间与退出码，管理员可查看全量数据 | `TC-3-8-02` 待补 |
+
+### Story 3-9 一次分配同型号多卡并整体释放
+
+作为成员，我希望让双卡或更多卡任务拿到整组同型号 GPU，以便训练可以按所需资源启动，并在退出时释放全部卡。
+
+**状态** 已实现，资源规模和实机待确认。**关联** FR-03、BC-02、ADR-8、FR-04、FR-08。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-3-9-01"></a>`AC-3-9-01` | FR-03、BC-02、ADR-8 | 按数据库 ID 排列的空闲卡型号为 A、B、B，且队首请求两张 | 给队首设置 B 型偏好并执行调度，再重置场景，分别省略偏好和指定只有一张卡的 A 型 | 指定 B 型一次分配两张 B 卡，任务记录两卡 ID 并逐卡写 `ALLOCATE`。省略偏好或指定 A 型时保持等待，后续单卡任务不越过队首且无部分写入 | `FCFS-03` `GPU-04` `GPU-05` `MG-01` `MG-02` `MG-03` `MG-04` `CONS-02` · 代码 [test_multigpu_allocates_two_same_model](../../backend/tests/test_multigpu.py#L52) [test_multigpu_respects_model_preference](../../backend/tests/test_multigpu.py#L92) [test_multigpu_falls_back_to_earliest_idle_model](../../backend/tests/test_multigpu.py#L118) [test_multigpu_insufficient_blocks_fcfs_head](../../backend/tests/test_multigpu.py#L140) · `TC-3-9-01` 待补（同一布局完整断言） |
+| <a name="ac-3-9-02"></a>`AC-3-9-02` | FR-03、FR-04、FR-08、ADR-8 | 任务绑定两张同型号卡，备有可运行、退出非 0、启动失败和可受控终止的场景 | 分别触发正常完成、执行失败、启动失败和已确认的终止 | 每个场景都释放两张卡并清除绑定，逐卡写一条 `RELEASE`，让后续任务可用 | `MG-05` `LIFE-07` `LIFE-08` `CONS-04` `CONS-06` · 手册 §8 场景 08 · 截图 02（分配展示） · 代码 [test_pm_multigpu_exit_releases_all_gpus](../../backend/tests/test_multigpu.py#L200)（正常退出） · `TC-3-9-02` 待补（双卡异常分支） |
+
+### Story 3-10 恢复重启后的任务和 GPU 一致性
+
+作为运维人员，我希望重启时核对仍存活和已退出的任务，以便已退出的任务释放卡，存活任务继续持有对应资源。
+
+**状态** 拟补强。**关联** NFR-05、FR-04、FR-08。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-3-10-01"></a>`AC-3-10-01` | NFR-05、FR-04、FR-08 | 至少一个长任务占用 GPU，并已记录进程及绑定，队列另有一个可用任务 | 独立模拟正常停机和异常中断，分别覆盖原任务仍存活和已停止，再启动服务 | 已存活任务保留正确占用，已停止任务进入终态且释放所有卡，绑定与释放日志一致，满足条件的队首可以运行 | `CONS-01` `CONS-04` `CONS-05` `CONS-06`（结果约束） · 代码 [test_pm_stop_kills_active_processes](../../backend/tests/test_process_manager.py#L159)（仅停机进程清理） · `TC-3-10-01` 待补 |
+
+## Epic 4 任务和 GPU 状态实时更新
+
+成员和管理员可接收授权范围内的状态和队列更新，连接恢复后可继续查看最新数据。
+
+### Story 4-1 建立和关闭授权的实时连接
+
+作为成员，我希望通过有效会话订阅事件，以便只有授权客户端能接收任务更新。
+
+**状态** 计划。**关联** FR-06、FR-13、AD-5。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-4-1-01"></a>`AC-4-1-01` | FR-06、FR-13、AD-5 | 后端支持 `/ws/events`，已有一个有效会话与一个无效会话 | 分别连接，再主动关闭有效连接 | 有效会话建立连接，无效会话无法订阅，关闭的连接被注销且后续事件不会向其写入 | `TC-4-1-01` 待补 |
+
+### Story 4-2 在状态提交后推送变化
+
+作为成员或管理员，我希望收到任务、队列和 GPU 的状态变更，以便页面能使用已持久化的最新状态。
+
+**状态** 计划。**关联** FR-06、AD-5。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-4-2-01"></a>`AC-4-2-01` | FR-06、AD-5 | 两个成员各有任务，管理员和成员均已连接 | 依次触发提交、分配、启动、完成、失败、取消、终止、队列位置变化及 GPU 状态变化，再模拟一笔回滚 | 成功提交的事件包含足够的任务或 GPU 标识、变化内容及时间，队列位置可更新，成员收不到他人私有任务数据，回滚的变化不产生可见事件 | `TC-4-2-01` 待补 |
+
+### Story 4-3 从快照恢复断线期间的状态
+
+作为成员或管理员，我希望连接及重连后收到授权范围的最新快照，以便断线期间的变化能补齐。
+
+**状态** 计划。**关联** FR-06、FR-13、AD-5。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-4-3-01"></a>`AC-4-3-01` | FR-06、FR-13、AD-5 | 客户端初次连接，之后网络断开，断线期间有任务完成和 GPU 被释放 | 首次连接时核对快照，观察断线重试并恢复网络 | 首次和恢复连接均收到当前可见的任务和 GPU 快照，持续断线时按退避策略重试，恢复后页面与数据库最终状态一致且无他人私有任务 | `TC-4-3-01` 待补 |
+
+### Story 4-4 把实时事件及时显示在页面
+
+作为成员或管理员，我希望自动看到任务和 GPU 数据更新，以便无需手动刷新即可跟进状态。
+
+**状态** 计划。**关联** FR-06、NFR-04、AD-5。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-4-4-01"></a>`AC-4-4-01` | FR-06、NFR-04、AD-5 | 页面已渲染快照、连接稳定，浏览器与服务端测量基准已记录 | 触发任务和 GPU 状态变更，从事务提交计时到相应页面显示变化 | 相关页面显示新状态、GPU 占用和队列位置，逐样本比较 500 ms。可视状态由事件更新，验收期间排除轮询或手动刷新对计时的干扰，统一统计口径见 O-05 | `TC-4-4-01` 待补 |
+
+## Epic 5 系统验收与部署交接
+
+测试和运维可复用现有手册及测试证据，验证完整链路并记录目标环境的结果。
+
+### Story 5-1 验证从排队到 GPU 再分配的全链路
+
+作为测试人员，我希望验证一个 GPU 上连续三项任务从排队到运行，以便可确认调度、执行和资源回收在真实入口协同工作。
+
+**状态** 现有集成测试部分覆盖，全流程待验。**关联** FR-01、FR-02、FR-04、FR-05。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-5-1-01"></a>`AC-5-1-01` | FR-01、FR-02、FR-04、FR-05 | 单后端已接入专用测试库，只有一张卡，并准备三个受控任务 | 依次提交三个任务，等待每次完成及下一任务启动，查询状态和日志 | 每个任务都有 `QUEUED`、`RUNNING`、`COMPLETED` 的持久化或事件证据，开始顺序符合 FCFS，GPU 每次释放后自动分给下一个任务，退出码均为 0 | `FCFS-01` `LIFE-01` `LIFE-03` `LIFE-04` `CONS-04` · 手册 §8 场景 05 · 代码 [test_dispatcher_plus_pm_integration](../../backend/tests/test_process_manager.py#L191)（单任务部分） · `TC-5-1-01` 待补（三任务全链路） |
+
+### Story 5-2 通过实际提交入口验证并发等待
+
+作为测试人员，我希望通过应用 API 并发提交任务并观察真实调度，以便可确认提交成功与实际获卡分别符合当前口径。
+
+**状态** 计划，复用 3-4 的 MySQL 验证。**关联** FR-01、FR-12、AD-1。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-5-2-01"></a>`AC-5-2-01` | FR-01、FR-12、AD-1 | 3-4 已在隔离 MySQL 验证，实际服务接入专用库，一张空闲卡及不会在观察期间退出的受控任务已准备 | 同时发起 50 个有效提交，等待第一个任务运行前后检查 API、数据库和分配记录 | 有效提交分别被受理。首任务启动且卡尚未释放时，状态恰有 1 个 `RUNNING`、49 个 `QUEUED`，绑定与唯一 `ALLOCATE` 一致。争用失败的 HTTP 409 契约待 O-01 确认 | `CON-01`（后台分配部分） · `TC-5-2-01` 待补（API 到进程） |
+
+### Story 5-3 复用演示清单并留存证据
+
+作为演示者，我希望按现有清单展示任务队列和多卡行为，以便验收人员可以复核关键功能和时间证据。
+
+**状态** 手册与截图已有，复验待执行。**关联** FR-01、FR-03、FR-05、FR-07、FR-08、FR-09、FR-04、FR-13。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-5-3-01"></a>`AC-5-3-01` | FR-01、FR-03、FR-05、FR-07、FR-08、FR-09 | 已按手册准备演示库、可运行命令和同型号卡登记记录 | 按现有手册演示提交、单卡排队、双卡占用、取消、终止及 GPU 查看，并保存截图和日志 | 每步可对照手册预期并记录是否符合。截图和日志能定位对应任务与 GPU，任务位置按全局活跃序号核对 | 手册 §8 场景 01–08 · 截图 01–04 |
+| <a name="ac-5-3-02"></a>`AC-5-3-02` | FR-01、FR-04、FR-05、FR-13 | 多人版会话与页面退出码可用，测试卡起初短时占用并会释放，短时 Python 脚本已准备 | 从登录计时，提交后先观察排队，释放测试卡，再观察运行和完成 | 成员在 5 分钟内看到 `COMPLETED` 和退出码 0，保留中间状态及耗时，短暂状态可用数据库或日志补证，与 PRD SM-01 一致 | `TC-5-3-02` 待补 |
+
+### Story 5-4 按现有手册完成目标环境部署验证
+
+作为部署人员，我希望在选定的平台按手册启动并定位问题，以便目标机的 Web、数据库及调度可以交接验收。
+
+**状态** Windows 手册已有，目标平台待确认。**关联** NFR-06、NFR-07、BC-01。
+
+| 验收编号 | 关联需求 | Given | When | Then | 测试用例或证据 |
+| --- | --- | --- | --- | --- | --- |
+| <a name="ac-5-4-01"></a>`AC-5-4-01` | NFR-06、NFR-07、BC-01 | O-03 已确定目标平台，依赖、端口、后端账户和专用数据库已准备 | 按手册检查配置、依赖及服务启动，并执行数据库读写和受控任务，验证 GPU 映射和进程退出 | 记录平台、依赖、端口及实际启动方式，Web 和健康接口可访问，数据库读写和调度成功。日志位置及故障排查可复现，实机结果关联 3-5 的设备验证 | 手册 §3–6、§8、§10 · `TC-5-4-01` 待补（目标平台交接） |
